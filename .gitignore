@@ -1,0 +1,5 @@
+node_modules/
+dist/
+
+# Local registry credentials — never commit
+.npmrc.local
