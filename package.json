@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
-    "@petedio/shared": "^0.1.0",
+    "@petedio/shared": "file:../../packages/shared",
     "zod": "^3.24.0"
   },
   "devDependencies": {

@@ -1,44 +1,32 @@
 /**
- * mcp-homelab — Unified MCP server for PeteDio Labs.
- * Merges docs-context + pm-agent + infra/event tools into a single server with 13 tools.
+ * mcp-homelab — Claude Code interface for PeteDio Labs.
+ *
+ * Lean set of tools for planning sessions with Claude:
+ *   - list_docs / gather_context  → read knowledge/ for context
+ *   - save_draft / publish_post   → write blog posts directly from Claude
+ *   - send_notification           → manually fire an infra event
+ *
+ * Agent work (infra investigation, board management, plan breaking,
+ * pipeline triggering) is now handled by dedicated agents in agents/.
+ * MC Backend dispatches those via POST /run on each agent.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 
-// Docs-context tools
 import { listDocs } from './tools/listDocs.js';
 import { gatherContext, formatContextForWriter } from './tools/gatherContext.js';
-import { triggerPipeline } from './tools/triggerPipeline.js';
-
-// PM-agent tools
-import { getStatus, formatStatus } from './tools/getStatus.js';
-import { createTasks, formatCreateResult, type TaskInput } from './tools/createTasks.js';
-import { planProject, formatPlanResult } from './tools/planProject.js';
-import { summarize } from './tools/summarize.js';
-import { getBlogContext, formatBlogContext } from './tools/getBlogContext.js';
-
-// Blog direct-write tools
 import { saveDraft, publishPost } from './tools/saveDraft.js';
 import { healthCheck } from './clients/blogApi.js';
-
-// Infra + event tools (Phase 1)
-import { getInfraStatus, formatInfraStatus } from './tools/infraStatus.js';
-import { getEvents, formatEvents } from './tools/events.js';
 import { notify } from './tools/notify.js';
+import { listAgentsTool, getTaskStatusTool, runAgentTool } from './tools/agentControl.js';
 
-// Environment
-const DOCS_ROOT = process.env.DOCS_ROOT || '/home/pedro/PeteDio-Labs/docs';
-const BLOG_AGENT_URL = process.env.BLOG_AGENT_URL || 'http://localhost:3004';
-
-const VALID_PROJECTS = ['pm-agent', 'pete-vision', 'blog', 'mission-control', 'infrastructure', 'notification-service', 'web-search', 'mcp-homelab'] as const;
-const VALID_PRIORITIES = ['high', 'medium', 'low'] as const;
-const VALID_STATUSES = ['Todo', 'In Progress', 'Done', 'Blogged'] as const;
+const DOCS_ROOT = process.env.DOCS_ROOT || '/home/pedro/PeteDio-Labs/knowledge';
 
 const server = new McpServer({
   name: 'homelab',
-  version: '0.1.0',
+  version: '0.2.0',
 });
 
 // ─── Docs Tools ────────────────────────────────────────────────
@@ -76,49 +64,11 @@ server.tool(
   },
 );
 
-server.tool(
-  'trigger_pipeline',
-  `Trigger the blog-agent content pipeline with project context injected. Gathers doc context automatically, optionally includes GitHub Projects completed items.`,
-  {
-    contentType: z.enum(['weekly-recap', 'how-to', 'docs-audit'])
-      .describe('Type of blog post to generate'),
-    topic: z.string().optional()
-      .describe('Optional topic for how-to or focused posts'),
-    includeGitHub: z.boolean().default(false)
-      .describe('Also pull completed GitHub Project items into context'),
-    blogAgentUrl: z.string().optional()
-      .describe(`Override blog-agent URL (default: ${BLOG_AGENT_URL})`),
-  },
-  async ({ contentType, topic, includeGitHub, blogAgentUrl }) => {
-    const url = blogAgentUrl || BLOG_AGENT_URL;
-
-    // Pre-flight: check blog-agent is reachable
-    try {
-      const healthRes = await fetch(`${url}/health`);
-      if (!healthRes.ok) {
-        return { content: [{ type: 'text', text: `Blog-agent health check failed (${healthRes.status}). Is it running?` }] };
-      }
-    } catch (err) {
-      return { content: [{ type: 'text', text: `Cannot reach blog-agent at ${url}: ${err instanceof Error ? err.message : err}` }] };
-    }
-
-    const result = await triggerPipeline(DOCS_ROOT, url, contentType, topic);
-    return {
-      content: [{
-        type: 'text',
-        text: result.success
-          ? `Pipeline triggered successfully.\nRun ID: ${result.runId}\nStatus: ${result.status}`
-          : `Pipeline trigger failed: ${result.error}`,
-      }],
-    };
-  },
-);
-
 // ─── Blog Direct Write Tools ───────────────────────────────────
 
 server.tool(
   'save_draft',
-  'Save a blog post directly to the blog-api database (bypasses blog-agent LLM pipeline). Use for Claude-written content or when the pipeline fails at save.',
+  'Save a blog post directly to the blog-api database (bypasses blog-agent LLM pipeline). Use for Claude-written content.',
   {
     title: z.string().describe('Post title'),
     content: z.string().describe('Post content in markdown'),
@@ -128,7 +78,6 @@ server.tool(
       .describe('Post status — DRAFT for review, PUBLISHED to go live'),
   },
   async ({ title, content, excerpt, tags, status }) => {
-    // Pre-flight
     const apiUp = await healthCheck();
     if (!apiUp) {
       return { content: [{ type: 'text', text: 'Blog API is unreachable. Is the port-forward running? (kubectl port-forward -n blog-dev svc/blog-api 8080:8080)' }] };
@@ -139,7 +88,7 @@ server.tool(
       return {
         content: [{
           type: 'text',
-          text: `Post saved successfully!\nID: ${result.post.id}\nSlug: ${result.post.slug}\nStatus: ${result.post.status}\nTags: ${result.post.tags.map(t => t.name).join(', ')}`,
+          text: `Post saved!\nID: ${result.post.id}\nSlug: ${result.post.slug}\nStatus: ${result.post.status}\nTags: ${result.post.tags.map((t: { name: string }) => t.name).join(', ')}`,
         }],
       };
     }
@@ -162,121 +111,11 @@ server.tool(
   },
 );
 
-// ─── PM-Agent Tools ────────────────────────────────────────────
-
-server.tool(
-  'get_status',
-  `Get current project status from the GitHub Projects board. Returns tasks grouped by status, in-progress items, and blockers.\n\nBoard fields: Project (${VALID_PROJECTS.join(', ')}), Priority (${VALID_PRIORITIES.join(', ')}), Status (${VALID_STATUSES.join(', ')})`,
-  {
-    projectNumber: z.coerce.number().describe('GitHub Project number (use 1 for PeteDio Labs Backlog)'),
-    projectFilter: z.string().optional().describe(`Filter by project name: ${VALID_PROJECTS.join(', ')}`),
-  },
-  async ({ projectNumber, projectFilter }) => {
-    const summary = await getStatus(projectNumber, projectFilter);
-    const text = formatStatus(summary);
-    return { content: [{ type: 'text', text }] };
-  },
-);
-
-server.tool(
-  'create_tasks',
-  `Create tasks on the GitHub Project board. Creates draft items by default (no repo needed). If repo is provided, creates repo issues instead.\n\nBoard fields: Project (${VALID_PROJECTS.join(', ')}), Priority (${VALID_PRIORITIES.join(', ')}), Status (${VALID_STATUSES.join(', ')})`,
-  {
-    tasks: z.array(z.object({
-      title: z.string().describe('Issue title (imperative, under 80 chars)'),
-      description: z.string().describe('Issue body/description in markdown'),
-      priority: z.enum(VALID_PRIORITIES).describe('Task priority'),
-      project: z.enum(VALID_PROJECTS).optional().describe('Project tag (overrides top-level projectName)'),
-      dependsOn: z.array(z.string()).optional().describe('List of dependency descriptions'),
-    })).describe('Array of tasks to create'),
-    projectNumber: z.coerce.number().describe('GitHub Project number (use 1 for PeteDio Labs Backlog)'),
-    projectName: z.enum(VALID_PROJECTS).optional().describe('Default project tag for all tasks'),
-    repo: z.string().optional().describe('Optional: target repo for issues (e.g., "PeteDio-Labs/blog-api"). Omit for draft items.'),
-  },
-  async ({ tasks, projectNumber, projectName, repo }) => {
-    const result = await createTasks(tasks as TaskInput[], projectNumber, projectName, repo);
-    const text = formatCreateResult(result);
-    return { content: [{ type: 'text', text }] };
-  },
-);
-
-server.tool(
-  'plan_project',
-  `Read an architecture plan doc and use Ollama (petedio-planner) to break it into phased, actionable GitHub issues. Returns structured task breakdown for create_tasks.\n\nProject: ${VALID_PROJECTS.join(', ')}`,
-  {
-    planFile: z.string().describe('Path to plan doc (relative to docs root or absolute)'),
-    projectName: z.enum(VALID_PROJECTS).describe('Project label for the tasks'),
-  },
-  async ({ planFile, projectName }) => {
-    const result = await planProject(planFile, projectName);
-    const text = formatPlanResult(result);
-    return {
-      content: [
-        { type: 'text', text },
-        { type: 'text', text: `\n\n---\n**Raw JSON (for create_tasks):**\n\`\`\`json\n${JSON.stringify(result, null, 2)}\n\`\`\`` },
-      ],
-    };
-  },
-);
-
-server.tool(
-  'summarize',
-  'Generate a human-readable project summary using Ollama. Reads the current board state and produces a status report with health assessment, blockers, and next actions.',
-  {
-    projectNumber: z.coerce.number().describe('GitHub Project number (use 1 for PeteDio Labs Backlog)'),
-  },
-  async ({ projectNumber }) => {
-    const text = await summarize(projectNumber);
-    return { content: [{ type: 'text', text }] };
-  },
-);
-
-server.tool(
-  'get_blog_context',
-  `Get blog-ready context for a project by pulling all completed (Done) items that haven't been blogged yet. Returns structured summary + JSON context for blog-agent. Marks items as "Blogged" by default.\n\nProject: ${VALID_PROJECTS.join(', ')}`,
-  {
-    projectNumber: z.coerce.number().describe('GitHub Project number (use 1 for PeteDio Labs Backlog)'),
-    projectFilter: z.enum(VALID_PROJECTS).describe('Project to gather blog context for'),
-    dryRun: z.coerce.boolean().optional().describe('If true, preview context without marking items as Blogged'),
-  },
-  async ({ projectNumber, projectFilter, dryRun }) => {
-    const ctx = await getBlogContext(projectNumber, projectFilter, !dryRun);
-    const text = formatBlogContext(ctx);
-    return { content: [{ type: 'text', text }] };
-  },
-);
-
-// ─── Infra + Event Tools ────────────────────────────────────────
-
-server.tool(
-  'get_infra_status',
-  'Get a combined infrastructure status view: ArgoCD app sync/health, Prometheus cluster health, and Proxmox node stats. Requires port-forward to MC backend (3000).',
-  {},
-  async () => {
-    const status = await getInfraStatus();
-    const text = formatInfraStatus(status);
-    return { content: [{ type: 'text', text }] };
-  },
-);
-
-server.tool(
-  'get_events',
-  'Get recent infrastructure events from the notification service. Filter by source (kubernetes/proxmox/argocd) and severity (info/warning/critical). Requires port-forward to notification-service (3002).',
-  {
-    limit: z.number().min(1).max(100).default(20).describe('Max events to return'),
-    source: z.enum(['kubernetes', 'proxmox', 'argocd']).optional().describe('Filter by event source'),
-    severity: z.enum(['info', 'warning', 'critical']).optional().describe('Filter by severity'),
-  },
-  async ({ limit, source, severity }) => {
-    const result = await getEvents(limit, source, severity);
-    const text = formatEvents(result);
-    return { content: [{ type: 'text', text }] };
-  },
-);
+// ─── Notification Tool ──────────────────────────────────────────
 
 server.tool(
   'send_notification',
-  'Publish an infrastructure event to the notification service. Events are queued and fanned out to Discord + webhook subscribers. Requires port-forward to notification-service (3002).',
+  'Publish an infrastructure event to the notification service. Useful for manually triggering alerts or testing the pipeline.',
   {
     source: z.enum(['kubernetes', 'proxmox', 'argocd']).describe('Event source'),
     type: z.enum(['deployment', 'pod-failure', 'vm-status', 'lxc-status', 'sync-drift', 'node-status', 'rollout']).describe('Event type'),
@@ -289,9 +128,46 @@ server.tool(
   async (params) => {
     const result = await notify(params);
     if (result.success) {
-      return { content: [{ type: 'text', text: `Event published successfully (ID: ${result.id})` }] };
+      return { content: [{ type: 'text', text: `Event published (ID: ${result.id})` }] };
     }
-    return { content: [{ type: 'text', text: `Failed to send notification: ${result.error}` }] };
+    return { content: [{ type: 'text', text: `Failed: ${result.error}` }] };
+  },
+);
+
+// ─── Agent Visibility Tools (Phase 2) ──────────────────────────
+
+server.tool(
+  'list_agents',
+  'Show the latest run status for each registered agent (blog-agent, ops-investigator, knowledge-janitor, pm-agent). Includes health, last task ID, status, and summary.',
+  {},
+  async () => {
+    const text = await listAgentsTool();
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'get_task_status',
+  'Get the full details of a specific agent run by task ID. Returns status, summary, current message, duration, and artifacts if complete.',
+  {
+    taskId: z.string().describe('Task ID from list_agents or a previous run_agent call'),
+  },
+  async ({ taskId }) => {
+    const text = await getTaskStatusTool(taskId);
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'run_agent',
+  'Trigger a whitelisted agent (knowledge-janitor or ops-investigator only). Returns a task ID to poll with get_task_status. Write agents (blog-agent, pm-agent) are not allowed.',
+  {
+    agentName: z.enum(['knowledge-janitor', 'ops-investigator']).describe('Agent to trigger'),
+    input: z.record(z.string(), z.unknown()).default({}).describe('Input payload for the agent'),
+  },
+  async ({ agentName, input }) => {
+    const text = await runAgentTool(agentName, input);
+    return { content: [{ type: 'text', text }] };
   },
 );
 
