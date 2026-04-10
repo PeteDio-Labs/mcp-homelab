@@ -21,8 +21,11 @@ import { saveDraft, publishPost } from './tools/saveDraft.js';
 import { healthCheck } from './clients/blogApi.js';
 import { notify } from './tools/notify.js';
 import { listAgentsTool, getTaskStatusTool, runAgentTool } from './tools/agentControl.js';
+import { codeOp, codePlan, type CodeOpAction } from './tools/codeAgent.js';
 
 const DOCS_ROOT = process.env.DOCS_ROOT || '/home/pedro/PeteDio-Labs/knowledge';
+const OLLAMA_HOST = process.env.OLLAMA_URL || 'http://192.168.50.59:11434';
+const CODER_MODEL = process.env.CODER_MODEL || 'gemma4:e4b';
 
 const server = new McpServer({
   name: 'homelab',
@@ -168,6 +171,73 @@ server.tool(
   async ({ agentName, input }) => {
     const text = await runAgentTool(agentName, input);
     return { content: [{ type: 'text', text }] };
+  },
+);
+
+// ─── Code Agent Tools ──────────────────────────────────────────
+
+server.tool(
+  'code_op',
+  'Execute a single code operation: read/write files, kubectl, git commit/push, or gh CLI. ' +
+  'DESTRUCTIVE actions (write_file, kubectl_apply, kubectl_delete, gh_pr_create, git_commit, git_push) require confirmed=true. ' +
+  'Risk tiers: 🟢 READ_ONLY (always safe), 🟡 SAFE_MUTATE (kubectl_exec), 🔴 DESTRUCTIVE (requires confirmed).',
+  {
+    action: z.enum([
+      'read_file', 'write_file',
+      'kubectl_get', 'kubectl_describe', 'kubectl_logs', 'kubectl_exec',
+      'kubectl_apply', 'kubectl_delete',
+      'gh_pr_list', 'gh_pr_create', 'gh_run_list', 'gh_run_view',
+      'git_commit', 'git_push',
+    ] as [CodeOpAction, ...CodeOpAction[]]).describe('Operation to perform'),
+    confirmed: z.boolean().optional().describe('Required true for DESTRUCTIVE actions'),
+    // file ops
+    path: z.string().optional().describe('Absolute file path (read_file/write_file). Must be under /home/pedro/PeteDio-Labs'),
+    content: z.string().optional().describe('File content to write (write_file)'),
+    // kubectl
+    namespace: z.string().optional().describe('Kubernetes namespace'),
+    resource: z.string().optional().describe('Kubernetes resource type (pod, deployment, service, …)'),
+    name: z.string().optional().describe('Resource name'),
+    container: z.string().optional().describe('Container name (kubectl_logs multi-container)'),
+    lines: z.number().optional().describe('Log lines to tail (kubectl_logs, default 100)'),
+    exec_command: z.array(z.string()).optional().describe('Command to run inside pod (kubectl_exec)'),
+    manifest_path: z.string().optional().describe('Manifest file path (kubectl_apply/delete)'),
+    // gh
+    repo: z.string().optional().describe('GitHub repo in owner/repo format'),
+    title: z.string().optional().describe('PR title (gh_pr_create)'),
+    body: z.string().optional().describe('PR body markdown (gh_pr_create)'),
+    base: z.string().optional().describe('Base branch (gh_pr_create, default: main)'),
+    head: z.string().optional().describe('Head branch (gh_pr_create)'),
+    run_id: z.string().optional().describe('GitHub Actions run ID (gh_run_view)'),
+    // git
+    message: z.string().optional().describe('Commit message (git_commit)'),
+    paths: z.array(z.string()).optional().describe('Files to stage (git_commit, default: all changes)'),
+    remote: z.string().optional().describe('Git remote (git_push, default: origin)'),
+    branch: z.string().optional().describe('Branch to push (git_push, default: current branch)'),
+    cwd: z.string().optional().describe('Working directory for git commands (default: /home/pedro/PeteDio-Labs)'),
+  },
+  async (args) => {
+    const result = await codeOp(args as Parameters<typeof codeOp>[0]);
+    return { content: [{ type: 'text', text: result }] };
+  },
+);
+
+server.tool(
+  'code_plan',
+  'Execute a step-by-step coding plan. ' +
+  'PREFERRED: provide your own plan as JSON via the `plan` parameter — Claude plans here (fast, free), ' +
+  'tool executes. No Ollama needed. ' +
+  'FALLBACK: omit `plan` and provide only `task` to have Ollama generate the plan (slow, ~30-60s). ' +
+  'Plan format: JSON array of {step, description, tool:"code_op", args, risk_tier} objects.',
+  {
+    task: z.string().min(1).describe('Task description'),
+    plan: z.string().optional().describe(
+      'Pre-written plan as JSON array of PlanStep objects. When provided, Ollama is skipped. ' +
+      'Example: [{"step":1,"description":"Read file","tool":"code_op","args":{"action":"read_file","path":"/home/pedro/PeteDio-Labs/..."},"risk_tier":"READ_ONLY"}]'
+    ),
+  },
+  async ({ task, plan }) => {
+    const result = await codePlan(task, OLLAMA_HOST, CODER_MODEL, plan);
+    return { content: [{ type: 'text', text: result }] };
   },
 );
 
