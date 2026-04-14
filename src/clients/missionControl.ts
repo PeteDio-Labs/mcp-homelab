@@ -61,6 +61,17 @@ export async function getTaskStatus(taskId: string): Promise<AgentRun | null> {
   return data.run;
 }
 
+/** Returns queued and running agent tasks. */
+export async function listAgentQueue(): Promise<AgentRun[]> {
+  const res = await fetch(`${MC_BACKEND_URL}/api/v1/agents/queue`, { signal: signal() });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`MC Backend GET /agents/queue failed (${res.status}): ${body}`);
+  }
+  const data = await res.json() as { queue: AgentRun[] };
+  return data.queue;
+}
+
 /** Trigger a whitelisted agent by name. Returns the new taskId. */
 export async function triggerAgent(agentName: string, input: Record<string, unknown> = {}): Promise<string> {
   const res = await fetch(`${MC_BACKEND_URL}/api/v1/agents/${encodeURIComponent(agentName)}/trigger`, {

@@ -1,5 +1,5 @@
 /**
- * mcp-homelab — Claude Code interface for PeteDio Labs.
+ * mcp-homelab — MCP interface for PeteDio Labs, usable from Claude Code and Codex.
  *
  * Lean set of tools for planning sessions with Claude:
  *   - list_docs / gather_context  → read knowledge/ for context
@@ -20,7 +20,7 @@ import { gatherContext, formatContextForWriter } from './tools/gatherContext.js'
 import { saveDraft, publishPost } from './tools/saveDraft.js';
 import { healthCheck } from './clients/blogApi.js';
 import { notify } from './tools/notify.js';
-import { listAgentsTool, getTaskStatusTool, runAgentTool } from './tools/agentControl.js';
+import { listAgentsTool, listAgentQueueTool, getTaskStatusTool, runAgentTool } from './tools/agentControl.js';
 import { codeOp, codePlan, type CodeOpAction } from './tools/codeAgent.js';
 
 const DOCS_ROOT = process.env.DOCS_ROOT || '/home/pedro/PeteDio-Labs/knowledge';
@@ -141,10 +141,20 @@ server.tool(
 
 server.tool(
   'list_agents',
-  'Show the latest run status for each registered agent (blog-agent, ops-investigator, knowledge-janitor, pm-agent). Includes health, last task ID, status, and summary.',
+  'Show the latest run status for each registered agent. Includes health, last task ID, status, and summary.',
   {},
   async () => {
     const text = await listAgentsTool();
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'list_agent_queue',
+  'Show queued and currently running agent tasks across Mission Control. Useful for monitoring workstation-agent and other active runs.',
+  {},
+  async () => {
+    const text = await listAgentQueueTool();
     return { content: [{ type: 'text', text }] };
   },
 );
@@ -163,9 +173,9 @@ server.tool(
 
 server.tool(
   'run_agent',
-  'Trigger a whitelisted agent (knowledge-janitor or ops-investigator only). Returns a task ID to poll with get_task_status. Write agents (blog-agent, pm-agent) are not allowed.',
+  'Trigger an allowed agent via Mission Control. Returns a task ID to poll with get_task_status. Allowed agents: knowledge-janitor, ops-investigator, workstation-agent, infra-agent, pm-agent, blog-agent.',
   {
-    agentName: z.enum(['knowledge-janitor', 'ops-investigator']).describe('Agent to trigger'),
+    agentName: z.enum(['knowledge-janitor', 'ops-investigator', 'workstation-agent', 'infra-agent', 'pm-agent', 'blog-agent']).describe('Agent to trigger'),
     input: z.record(z.string(), z.unknown()).default({}).describe('Input payload for the agent'),
   },
   async ({ agentName, input }) => {

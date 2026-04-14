@@ -1,11 +1,11 @@
 /**
  * Agent control tools for MCP.
  *
- * Phase 2: list_agents, get_task_status (read-only)
- * Phase 4: run_agent (whitelist-only trigger)
+ * Phase 2: list_agents, get_task_status, list_agent_queue (read-only)
+ * Phase 4: run_agent (controlled trigger surface)
  */
 
-import { listAgents, getTaskStatus, triggerAgent, type AgentRun } from '../clients/missionControl.js';
+import { listAgents, getTaskStatus, listAgentQueue, triggerAgent, type AgentRun } from '../clients/missionControl.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
@@ -25,9 +25,18 @@ function formatRun(run: AgentRun): string {
   return lines.join('\n');
 }
 
-// ─── Whitelist (Phase 4) ──────────────────────────────────────────
+// ─── Trigger surface ──────────────────────────────────────────────
 
-const TRIGGER_WHITELIST = new Set(['knowledge-janitor', 'ops-investigator']);
+const TRIGGERABLE_AGENTS = [
+  'knowledge-janitor',
+  'ops-investigator',
+  'workstation-agent',
+  'infra-agent',
+  'pm-agent',
+  'blog-agent',
+] as const;
+
+const TRIGGER_ALLOWLIST = new Set<string>(TRIGGERABLE_AGENTS);
 
 // ─── Tool implementations ─────────────────────────────────────────
 
@@ -37,6 +46,12 @@ export async function listAgentsTool(): Promise<string> {
   return agents.map(formatRun).join('\n\n---\n\n');
 }
 
+export async function listAgentQueueTool(): Promise<string> {
+  const queue = await listAgentQueue();
+  if (queue.length === 0) return 'No queued or running agent tasks.';
+  return queue.map(formatRun).join('\n\n---\n\n');
+}
+
 export async function getTaskStatusTool(taskId: string): Promise<string> {
   const run = await getTaskStatus(taskId);
   if (!run) return `No run found for taskId: ${taskId}`;
@@ -44,8 +59,8 @@ export async function getTaskStatusTool(taskId: string): Promise<string> {
 }
 
 export async function runAgentTool(agentName: string, input: Record<string, unknown> = {}): Promise<string> {
-  if (!TRIGGER_WHITELIST.has(agentName)) {
-    const allowed = Array.from(TRIGGER_WHITELIST).join(', ');
+  if (!TRIGGER_ALLOWLIST.has(agentName)) {
+    const allowed = Array.from(TRIGGER_ALLOWLIST).join(', ');
     return `Agent "${agentName}" is not in the trigger whitelist. Allowed agents: ${allowed}`;
   }
   const taskId = await triggerAgent(agentName, input);
