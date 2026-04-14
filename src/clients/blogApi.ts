@@ -61,3 +61,30 @@ export async function healthCheck(): Promise<boolean> {
     return false;
   }
 }
+
+export interface RagResult {
+  id: number;
+  postId: number | null;
+  sourceType: string;
+  sourceRef: string;
+  chunkIndex: number;
+  chunkText: string;
+  similarity: number;
+}
+
+export async function ragQuery(
+  query: string,
+  topK: number,
+  sourceTypes: string[],
+): Promise<{ results: RagResult[]; count: number }> {
+  const res = await fetch(`${BLOG_API_URL}/api/v1/rag/query`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, topK, sourceTypes }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!res.ok) {
+    throw new Error(`RAG query failed: ${res.status} ${await res.text()}`);
+  }
+  return res.json() as Promise<{ results: RagResult[]; count: number }>;
+}

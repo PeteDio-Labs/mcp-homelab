@@ -18,7 +18,7 @@ import { z } from 'zod';
 import { listDocs } from './tools/listDocs.js';
 import { gatherContext, formatContextForWriter } from './tools/gatherContext.js';
 import { saveDraft, publishPost } from './tools/saveDraft.js';
-import { healthCheck } from './clients/blogApi.js';
+import { healthCheck, ragQuery } from './clients/blogApi.js';
 import { notify } from './tools/notify.js';
 import {
   listAgentsTool,
@@ -120,6 +120,35 @@ server.tool(
       return { content: [{ type: 'text', text: `Post ${id} published: "${result.post.title}"` }] };
     }
     return { content: [{ type: 'text', text: `Failed to publish post ${id}: ${result.error}` }] };
+  },
+);
+
+server.tool(
+  'rag_query',
+  'Semantic search across the blog knowledge base (posts, session summaries, architecture docs). Returns the most relevant chunks by cosine similarity. Requires blog-api port-forward if running locally.',
+  {
+    query: z.string().describe('Natural language search query'),
+    topK: z.number().min(1).max(20).default(5).describe('Number of chunks to return'),
+    sourceTypes: z.array(z.enum(['post', 'session', 'doc'])).default(['post', 'session', 'doc'])
+      .describe('Limit results by source type: post=published blog posts, session=session summaries, doc=architecture/knowledge docs'),
+  },
+  async ({ query, topK, sourceTypes }) => {
+    const apiUp = await healthCheck();
+    if (!apiUp) {
+      return { content: [{ type: 'text', text: 'Blog API unreachable. Port-forward needed: kubectl port-forward -n blog-dev svc/blog-api 8080:8080' }] };
+    }
+    try {
+      const { results } = await ragQuery(query, topK, sourceTypes);
+      if (!results.length) {
+        return { content: [{ type: 'text', text: `No results found for: "${query}"` }] };
+      }
+      const text = results.map((r, i) =>
+        `[${i + 1}] ${r.sourceType}:${r.sourceRef} (similarity: ${r.similarity.toFixed(3)})\n${r.chunkText.slice(0, 600)}`
+      ).join('\n\n---\n\n');
+      return { content: [{ type: 'text', text: text }] };
+    } catch (err) {
+      return { content: [{ type: 'text', text: `RAG query error: ${err instanceof Error ? err.message : String(err)}` }] };
+    }
   },
 );
 
