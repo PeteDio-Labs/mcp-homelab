@@ -20,7 +20,16 @@ import { gatherContext, formatContextForWriter } from './tools/gatherContext.js'
 import { saveDraft, publishPost } from './tools/saveDraft.js';
 import { healthCheck } from './clients/blogApi.js';
 import { notify } from './tools/notify.js';
-import { listAgentsTool, listAgentQueueTool, getTaskStatusTool, runAgentTool } from './tools/agentControl.js';
+import {
+  listAgentsTool,
+  listAgentQueueTool,
+  getTaskStatusTool,
+  runAgentTool,
+  watchAgentTool,
+  runInfraCheckTool,
+  runInfraPlaybookTool,
+  runWorkstationTaskTool,
+} from './tools/agentControl.js';
 import { codeOp, codePlan, type CodeOpAction } from './tools/codeAgent.js';
 
 const DOCS_ROOT = process.env.DOCS_ROOT || '/home/pedro/PeteDio-Labs/knowledge';
@@ -180,6 +189,67 @@ server.tool(
   },
   async ({ agentName, input }) => {
     const text = await runAgentTool(agentName, input);
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'watch_agent',
+  'Poll a specific agent task and return its latest state. Useful as a compact follow-up after run_agent.',
+  {
+    taskId: z.string().describe('Task ID returned by run_agent or another wrapper tool'),
+  },
+  async ({ taskId }) => {
+    const text = await watchAgentTool(taskId);
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'run_infra_check',
+  'Trigger a common read-only infra-agent runbook through Mission Control.',
+  {
+    mode: z.enum(['health-check', 'check-capacity', 'list-vms', 'list-playbooks', 'get-inventory']).describe('Read-only infrastructure check to run'),
+  },
+  async ({ mode }) => {
+    const text = await runInfraCheckTool(mode);
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'run_infra_playbook',
+  'Trigger a common infra-agent playbook workflow through Mission Control. Named runbooks are preferred over raw playbook execution.',
+  {
+    mode: z.enum(['deploy-local-agents', 'sync-ollama-models', 'update-ollama-service', 'verify-cloudflare-tunnel', 'dry-run-playbook', 'run-playbook'])
+      .describe('Named infra runbook or raw playbook mode'),
+    playbook: z.string().optional().describe('Required for dry-run-playbook or run-playbook'),
+    extraVars: z.string().optional().describe('Optional --extra-vars string'),
+    gated: z.boolean().default(false).describe('Required true for run-playbook and other write flows'),
+  },
+  async ({ mode, playbook, extraVars, gated }) => {
+    const text = await runInfraPlaybookTool(mode, { playbook, extraVars, gated });
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'run_workstation_task',
+  'Trigger a common workstation-agent task through Mission Control using a typed deterministic mode.',
+  {
+    mode: z.enum(['inspect-repo', 'git-status', 'git-log', 'bun', 'kubectl-get', 'read-file', 'write-file', 'systemd-restart', 'command']).describe('Workstation task mode'),
+    workDir: z.string().optional().describe('Working directory for the task'),
+    gated: z.boolean().default(false).describe('Enable gated workstation actions'),
+    command: z.string().optional().describe('Shell command for command mode'),
+    path: z.string().optional().describe('File path for read-file or write-file'),
+    content: z.string().optional().describe('Content for write-file'),
+    script: z.string().optional().describe('Bun script or args'),
+    resource: z.string().optional().describe('kubectl resource selector'),
+    unit: z.string().optional().describe('Systemd unit'),
+    gitLogCount: z.number().optional().describe('Commit count for git-log'),
+  },
+  async (args) => {
+    const text = await runWorkstationTaskTool(args.mode, args);
     return { content: [{ type: 'text', text }] };
   },
 );

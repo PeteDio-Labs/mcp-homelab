@@ -66,3 +66,61 @@ export async function runAgentTool(agentName: string, input: Record<string, unkn
   const taskId = await triggerAgent(agentName, input);
   return `Agent "${agentName}" triggered successfully.\ntaskId: ${taskId}\n\nUse get_task_status("${taskId}") to check progress.`;
 }
+
+export async function watchAgentTool(taskId: string): Promise<string> {
+  const run = await getTaskStatus(taskId);
+  if (!run) return `No run found for taskId: ${taskId}`;
+  const lines = [formatRun(run)];
+  if (run.status === 'queued' || run.status === 'running') {
+    lines.push('', 'This task is still active. Use watch_agent again to poll.');
+  }
+  return lines.join('\n');
+}
+
+export async function runInfraCheckTool(
+  mode: 'health-check' | 'check-capacity' | 'list-vms' | 'list-playbooks' | 'get-inventory',
+): Promise<string> {
+  return runAgentTool('infra-agent', { mode, gated: false });
+}
+
+export async function runInfraPlaybookTool(
+  mode: 'deploy-local-agents' | 'sync-ollama-models' | 'update-ollama-service' | 'verify-cloudflare-tunnel' | 'dry-run-playbook' | 'run-playbook',
+  opts: { playbook?: string; extraVars?: string; gated?: boolean } = {},
+): Promise<string> {
+  const input: Record<string, unknown> = {
+    mode,
+    gated: opts.gated ?? false,
+  };
+  if (opts.playbook) input.playbook = opts.playbook;
+  if (opts.extraVars) input.extraVars = opts.extraVars;
+  return runAgentTool('infra-agent', input);
+}
+
+export async function runWorkstationTaskTool(
+  mode: 'inspect-repo' | 'git-status' | 'git-log' | 'bun' | 'kubectl-get' | 'read-file' | 'write-file' | 'systemd-restart' | 'command',
+  opts: {
+    workDir?: string;
+    gated?: boolean;
+    command?: string;
+    path?: string;
+    content?: string;
+    script?: string;
+    resource?: string;
+    unit?: string;
+    gitLogCount?: number;
+  } = {},
+): Promise<string> {
+  const input: Record<string, unknown> = {
+    mode,
+    workDir: opts.workDir ?? '/home/pedro/PeteDio-Labs',
+    gated: opts.gated ?? false,
+  };
+  if (opts.command) input.command = opts.command;
+  if (opts.path) input.path = opts.path;
+  if (opts.content !== undefined) input.content = opts.content;
+  if (opts.script) input.script = opts.script;
+  if (opts.resource) input.resource = opts.resource;
+  if (opts.unit) input.unit = opts.unit;
+  if (opts.gitLogCount !== undefined) input.gitLogCount = opts.gitLogCount;
+  return runAgentTool('workstation-agent', input);
+}
