@@ -28,7 +28,9 @@ import {
   watchAgentTool,
   runInfraCheckTool,
   runInfraPlaybookTool,
+  runCloudflareTunnelTool,
   runWorkstationTaskTool,
+  runWorkstationGrepReplaceTool,
 } from './tools/agentControl.js';
 import { codeOp, codePlan, type CodeOpAction } from './tools/codeAgent.js';
 
@@ -254,10 +256,25 @@ server.tool(
       .describe('Named infra runbook or raw playbook mode'),
     playbook: z.string().optional().describe('Required for dry-run-playbook or run-playbook'),
     extraVars: z.string().optional().describe('Optional --extra-vars string'),
+    tags: z.string().regex(/^[\w,-]+$/).optional().describe('Optional --tags string (comma-separated)'),
     gated: z.boolean().default(false).describe('Required true for run-playbook and other write flows'),
   },
-  async ({ mode, playbook, extraVars, gated }) => {
-    const text = await runInfraPlaybookTool(mode, { playbook, extraVars, gated });
+  async ({ mode, playbook, extraVars, tags, gated }) => {
+    const text = await runInfraPlaybookTool(mode, { playbook, extraVars, tags, gated });
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'run_cloudflare_tunnel',
+  'Drive the cloudflare-tunnel Ansible role through infra-agent. Each action runs the matching --tags. Non-gated runs are dry-run only (check + diff); gated runs apply.',
+  {
+    action: z.enum(['routes', 'dns', 'dns-cleanup', 'verify', 'connector'])
+      .describe('routes=push tunnel ingress, dns=create CNAMEs, dns-cleanup=delete removed CNAMEs, verify=read-only checks, connector=update cloudflared container'),
+    gated: z.boolean().default(false).describe('Required true to apply; false runs check/diff only (verify is always read-only)'),
+  },
+  async ({ action, gated }) => {
+    const text = await runCloudflareTunnelTool(action, { gated });
     return { content: [{ type: 'text', text }] };
   },
 );
@@ -279,6 +296,22 @@ server.tool(
   },
   async (args) => {
     const text = await runWorkstationTaskTool(args.mode, args);
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'run_workstation_grep_replace',
+  'Codebase-wide find/replace via workstation-agent. Always run with dryRun=true first to inspect the file list. Hard-blocks short or catch-all patterns; refuses apply if >50 files match. Apply requires gated=true.',
+  {
+    pattern: z.string().min(4).describe('Regex pattern (passed to ripgrep). Must be at least 4 chars; pure-whitespace/dot patterns are blocked.'),
+    replacement: z.string().optional().describe('Replacement string for sed (required when dryRun=false)'),
+    pathGlob: z.string().optional().describe('Path glob to limit blast radius (defaults to repo root)'),
+    dryRun: z.boolean().default(true).describe('When true, only lists matched files. Default true.'),
+    gated: z.boolean().default(false).describe('Required true to actually apply replacements'),
+  },
+  async ({ pattern, replacement, pathGlob, dryRun, gated }) => {
+    const text = await runWorkstationGrepReplaceTool({ pattern, replacement, pathGlob, dryRun, gated });
     return { content: [{ type: 'text', text }] };
   },
 );
