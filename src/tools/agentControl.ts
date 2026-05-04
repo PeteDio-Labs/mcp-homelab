@@ -85,7 +85,7 @@ export async function runInfraCheckTool(
 
 export async function runInfraPlaybookTool(
   mode: 'deploy-local-agents' | 'sync-ollama-models' | 'update-ollama-service' | 'verify-cloudflare-tunnel' | 'dry-run-playbook' | 'run-playbook',
-  opts: { playbook?: string; extraVars?: string; gated?: boolean } = {},
+  opts: { playbook?: string; extraVars?: string; tags?: string; gated?: boolean } = {},
 ): Promise<string> {
   const input: Record<string, unknown> = {
     mode,
@@ -93,7 +93,33 @@ export async function runInfraPlaybookTool(
   };
   if (opts.playbook) input.playbook = opts.playbook;
   if (opts.extraVars) input.extraVars = opts.extraVars;
+  if (opts.tags) input.tags = opts.tags;
   return runAgentTool('infra-agent', input);
+}
+
+export async function runCloudflareTunnelTool(
+  action: 'routes' | 'dns' | 'dns-cleanup' | 'verify' | 'connector',
+  opts: { gated?: boolean } = {},
+): Promise<string> {
+  const input: Record<string, unknown> = {
+    mode: `cloudflare-tunnel-${action}`,
+    gated: opts.gated ?? false,
+  };
+  return runAgentTool('infra-agent', input);
+}
+
+export async function runWorkstationGrepReplaceTool(
+  opts: { pattern: string; replacement?: string; pathGlob?: string; dryRun?: boolean; gated?: boolean },
+): Promise<string> {
+  const input: Record<string, unknown> = {
+    mode: 'grep-replace',
+    pattern: opts.pattern,
+    dryRun: opts.dryRun ?? true,
+    gated: opts.gated ?? false,
+  };
+  if (opts.replacement !== undefined) input.replacement = opts.replacement;
+  if (opts.pathGlob) input.pathGlob = opts.pathGlob;
+  return runAgentTool('workstation-agent', input);
 }
 
 export async function runWorkstationTaskTool(
