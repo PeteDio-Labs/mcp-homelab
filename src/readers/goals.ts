@@ -15,7 +15,15 @@ export interface GoalDigest {
  */
 export async function readGoals(docsRoot: string): Promise<GoalDigest[]> {
   const filePath = join(docsRoot, 'architecture', 'FUTURE-GOALS.md');
-  const content = await readFile(filePath, 'utf-8');
+  let content: string;
+  try {
+    content = await readFile(filePath, 'utf-8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return [];
+    }
+    throw error;
+  }
 
   const goals: GoalDigest[] = [];
   const markerRe = /<!--\s*goal:\s*(\d+),\s*status:\s*(\w+)(?:,\s*completed:\s*([\d-]+))?(?:,\s*priority:\s*(\w+))?\s*-->/g;

@@ -5,15 +5,19 @@
   "private": true,
   "scripts": {
     "dev": "bun run src/index.ts",
-    "typecheck": "bun tsc --noEmit"
+    "verify:phase1.5": "bun scripts/verify-phase-1-5.mjs",
+    "typecheck": "bun tsc --noEmit",
+    "test": "bun test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.0",
     "@petedio/shared": "file:../../packages/shared",
+    "express": "^5.1.0",
     "zod": "^3.24.0"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/express": "^5.0.1",
     "typescript": "^5.8.0"
   }
 }
