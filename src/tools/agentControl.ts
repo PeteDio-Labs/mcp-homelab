@@ -5,7 +5,24 @@
  * Phase 4: run_agent (controlled trigger surface)
  */
 
-import { listAgents, getTaskStatus, listAgentQueue, triggerAgent, type AgentRun } from '../clients/missionControl.js';
+import {
+  listAgents,
+  getTaskStatus,
+  listAgentQueue,
+  triggerAgent,
+  approveTask,
+  rejectTask,
+  getProxmoxStatus,
+  getProxmoxNodes,
+  getProxmoxNodeStatus,
+  getProxmoxResources,
+  getProxmoxNodeVMs,
+  getProxmoxNodeLXCs,
+  runProxmoxPowerAction,
+  type AgentRun,
+  type ProxmoxResourceType,
+  type ProxmoxPowerAction,
+} from '../clients/missionControl.js';
 
 // ─── Helpers ─────────────────────────────────────────────────────
 
@@ -21,6 +38,12 @@ function formatRun(run: AgentRun): string {
   if (run.duration_ms != null) lines.push(`duration: ${run.duration_ms}ms`);
   if (run.summary) lines.push(`summary: ${run.summary}`);
   if (run.current_message) lines.push(`message: ${run.current_message}`);
+  if (run.pending_approval) {
+    lines.push(`requiresApproval.actionType: ${run.pending_approval.actionType}`);
+    lines.push(`requiresApproval.description: ${run.pending_approval.description}`);
+    if (run.pending_approval.preview) lines.push(`requiresApproval.preview:\n${run.pending_approval.preview}`);
+    lines.push(`→ Call approve_task("${run.task_id}") or reject_task("${run.task_id}") to resolve.`);
+  }
   if (run.health) lines.push(`health: ${run.health.status} (checked ${run.health.checkedAt})`);
   return lines.join('\n');
 }
@@ -34,6 +57,9 @@ const TRIGGERABLE_AGENTS = [
   'infra-agent',
   'pm-agent',
   'blog-agent',
+  'research-agent',
+  'code-review-agent',
+  'memory-agent',
 ] as const;
 
 const TRIGGER_ALLOWLIST = new Set<string>(TRIGGERABLE_AGENTS);
@@ -149,4 +175,70 @@ export async function runWorkstationTaskTool(
   if (opts.unit) input.unit = opts.unit;
   if (opts.gitLogCount !== undefined) input.gitLogCount = opts.gitLogCount;
   return runAgentTool('workstation-agent', input);
+}
+
+export async function approveTaskTool(taskId: string): Promise<string> {
+  const result = await approveTask(taskId);
+  return `Task ${result.taskId} approved.\nstatus: ${result.status}\noutcome: ${result.outcome}`;
+}
+
+export async function rejectTaskTool(taskId: string, reason?: string): Promise<string> {
+  const result = await rejectTask(taskId, reason);
+  return `Task ${result.taskId} rejected.\nstatus: ${result.status}\noutcome: ${result.outcome}${reason ? `\nreason: ${reason}` : ''}`;
+}
+
+export async function getProxmoxStatusTool(): Promise<string> {
+  const status = await getProxmoxStatus();
+  return JSON.stringify(status, null, 2);
+}
+
+export async function getProxmoxNodesTool(): Promise<string> {
+  const nodes = await getProxmoxNodes();
+  return JSON.stringify(nodes, null, 2);
+}
+
+export async function getProxmoxNodeStatusTool(node: string): Promise<string> {
+  const status = await getProxmoxNodeStatus(node);
+  return JSON.stringify(status, null, 2);
+}
+
+export async function getProxmoxResourcesTool(type?: ProxmoxResourceType): Promise<string> {
+  const resources = await getProxmoxResources(type);
+  return JSON.stringify(resources, null, 2);
+}
+
+export async function getProxmoxNodeVMsTool(node: string): Promise<string> {
+  const vms = await getProxmoxNodeVMs(node);
+  return JSON.stringify(vms, null, 2);
+}
+
+export async function getProxmoxNodeLXCsTool(node: string): Promise<string> {
+  const lxcs = await getProxmoxNodeLXCs(node);
+  return JSON.stringify(lxcs, null, 2);
+}
+
+export async function runProxmoxVmPowerTool(
+  node: string,
+  vmid: number,
+  action: ProxmoxPowerAction,
+  confirmed: boolean,
+): Promise<string> {
+  if (!confirmed) {
+    return 'Refusing Proxmox VM power action. Re-run with confirmed=true.';
+  }
+  const result = await runProxmoxPowerAction('vm', node, vmid, action);
+  return JSON.stringify(result, null, 2);
+}
+
+export async function runProxmoxLxcPowerTool(
+  node: string,
+  vmid: number,
+  action: ProxmoxPowerAction,
+  confirmed: boolean,
+): Promise<string> {
+  if (!confirmed) {
+    return 'Refusing Proxmox LXC power action. Re-run with confirmed=true.';
+  }
+  const result = await runProxmoxPowerAction('lxc', node, vmid, action);
+  return JSON.stringify(result, null, 2);
 }

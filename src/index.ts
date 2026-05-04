@@ -13,6 +13,8 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import express from 'express';
 import { z } from 'zod';
 
 import { listDocs } from './tools/listDocs.js';
@@ -26,16 +28,25 @@ import {
   getTaskStatusTool,
   runAgentTool,
   watchAgentTool,
+  approveTaskTool,
+  rejectTaskTool,
   runInfraCheckTool,
   runInfraPlaybookTool,
   runCloudflareTunnelTool,
   runWorkstationTaskTool,
   runWorkstationGrepReplaceTool,
+  getProxmoxStatusTool,
+  getProxmoxNodesTool,
+  getProxmoxNodeStatusTool,
+  getProxmoxResourcesTool,
+  getProxmoxNodeVMsTool,
+  getProxmoxNodeLXCsTool,
+  runProxmoxVmPowerTool,
+  runProxmoxLxcPowerTool,
 } from './tools/agentControl.js';
 import { codeOp, codePlan, type CodeOpAction } from './tools/codeAgent.js';
 
 const DOCS_ROOT = process.env.DOCS_ROOT || '/home/pedro/PeteDio-Labs/knowledge';
-const OLLAMA_HOST = process.env.OLLAMA_URL || 'http://192.168.50.59:11434';
 const CODER_MODEL = process.env.CODER_MODEL || 'gemma4:e4b';
 
 const server = new McpServer({
@@ -237,6 +248,31 @@ server.tool(
 );
 
 server.tool(
+  'approve_task',
+  'Approve a gated agent action. Use when get_task_status shows requiresApproval and you want to proceed. The agent resumes automatically after approval.',
+  {
+    taskId: z.string().describe('Task ID of the run in waiting_approval state'),
+  },
+  async ({ taskId }) => {
+    const text = await approveTaskTool(taskId);
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'reject_task',
+  'Reject a gated agent action. The task is marked failed and the agent stops. Use when get_task_status shows requiresApproval and you want to cancel.',
+  {
+    taskId: z.string().describe('Task ID of the run in waiting_approval state'),
+    reason: z.string().optional().describe('Optional reason for rejection'),
+  },
+  async ({ taskId, reason }) => {
+    const text = await rejectTaskTool(taskId, reason);
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
   'run_infra_check',
   'Trigger a common read-only infra-agent runbook through Mission Control.',
   {
@@ -316,6 +352,104 @@ server.tool(
   },
 );
 
+server.tool(
+  'proxmox_status',
+  'Get Proxmox connector status via Mission Control backend.',
+  {},
+  async () => {
+    const text = await getProxmoxStatusTool();
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'proxmox_nodes',
+  'List Proxmox nodes via Mission Control backend.',
+  {},
+  async () => {
+    const text = await getProxmoxNodesTool();
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'proxmox_node_status',
+  'Get detailed status for one Proxmox node via Mission Control backend.',
+  {
+    node: z.string().min(1).describe('Proxmox node name, e.g. pve01'),
+  },
+  async ({ node }) => {
+    const text = await getProxmoxNodeStatusTool(node);
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'proxmox_resources',
+  'List Proxmox resources via Mission Control backend.',
+  {
+    type: z.enum(['node', 'vm', 'lxc', 'storage']).optional().describe('Optional resource type filter'),
+  },
+  async ({ type }) => {
+    const text = await getProxmoxResourcesTool(type);
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'proxmox_node_vms',
+  'List QEMU VMs for a Proxmox node via Mission Control backend.',
+  {
+    node: z.string().min(1).describe('Proxmox node name, e.g. pve01'),
+  },
+  async ({ node }) => {
+    const text = await getProxmoxNodeVMsTool(node);
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'proxmox_node_lxcs',
+  'List LXC containers for a Proxmox node via Mission Control backend.',
+  {
+    node: z.string().min(1).describe('Proxmox node name, e.g. pve01'),
+  },
+  async ({ node }) => {
+    const text = await getProxmoxNodeLXCsTool(node);
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'proxmox_vm_power',
+  'Execute VM power action via Mission Control backend. Requires confirmed=true.',
+  {
+    node: z.string().min(1).describe('Proxmox node name'),
+    vmid: z.number().int().positive().describe('VM ID'),
+    action: z.enum(['start', 'stop', 'restart']).describe('Power action'),
+    confirmed: z.boolean().default(false).describe('Must be true to execute the action'),
+  },
+  async ({ node, vmid, action, confirmed }) => {
+    const text = await runProxmoxVmPowerTool(node, vmid, action, confirmed);
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
+server.tool(
+  'proxmox_lxc_power',
+  'Execute LXC power action via Mission Control backend. Requires confirmed=true.',
+  {
+    node: z.string().min(1).describe('Proxmox node name'),
+    vmid: z.number().int().positive().describe('LXC ID'),
+    action: z.enum(['start', 'stop', 'restart']).describe('Power action'),
+    confirmed: z.boolean().default(false).describe('Must be true to execute the action'),
+  },
+  async ({ node, vmid, action, confirmed }) => {
+    const text = await runProxmoxLxcPowerTool(node, vmid, action, confirmed);
+    return { content: [{ type: 'text', text }] };
+  },
+);
+
 // ─── Code Agent Tools ──────────────────────────────────────────
 
 server.tool(
@@ -378,12 +512,45 @@ server.tool(
     ),
   },
   async ({ task, plan }) => {
-    const result = await codePlan(task, OLLAMA_HOST, CODER_MODEL, plan);
+    const result = await codePlan(task, CODER_MODEL, plan);
     return { content: [{ type: 'text', text: result }] };
   },
 );
 
 // ─── Start ─────────────────────────────────────────────────────
 
-const transport = new StdioServerTransport();
-await server.connect(transport);
+const MCP_TRANSPORT = process.env.MCP_TRANSPORT ?? 'stdio';
+const MCP_PORT = Number.parseInt(process.env.MCP_PORT ?? '3011', 10);
+
+if (MCP_TRANSPORT === 'http') {
+  const app = express();
+  const transports = new Map<string, SSEServerTransport>();
+
+  app.get('/sse', async (_req, res) => {
+    const transport = new SSEServerTransport('/messages', res);
+    transports.set(transport.sessionId, transport);
+    res.on('close', () => transports.delete(transport.sessionId));
+    await server.connect(transport);
+  });
+
+  app.post('/messages', express.json(), async (req, res) => {
+    const sessionId = String(req.query['sessionId'] ?? '');
+    const transport = transports.get(sessionId);
+    if (!transport) {
+      res.status(404).json({ error: 'Session not found' });
+      return;
+    }
+    await transport.handlePostMessage(req, res);
+  });
+
+  app.get('/health', (_req, res) => {
+    res.json({ status: 'ok', service: 'mcp-homelab', transport: 'http', port: MCP_PORT });
+  });
+
+  app.listen(MCP_PORT, '0.0.0.0', () => {
+    console.log(`mcp-homelab HTTP/SSE listening on 0.0.0.0:${MCP_PORT}`);
+  });
+} else {
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+}

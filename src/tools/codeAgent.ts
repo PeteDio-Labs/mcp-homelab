@@ -13,6 +13,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { resolveOllamaUrl } from '@petedio/shared/agents';
 
 const execFileAsync = promisify(execFile);
 
@@ -301,7 +302,6 @@ export interface PlanStep {
 
 export async function codePlan(
   task: string,
-  ollamaHost: string,
   baseModel: string,
   /** Pre-written plan from Claude (JSON string or PlanStep[]). When provided,
    *  Ollama is skipped entirely — Claude plans, this tool executes. */
@@ -322,6 +322,7 @@ export async function codePlan(
   } else {
     // Fallback: generate plan via Ollama (slower, use only when Claude is not planning)
     const model = resolveModel(task, baseModel);
+    const ollamaUrl = resolveOllamaUrl(model);
     const complexity = classifyTaskComplexity(task);
 
     const payload = {
@@ -333,7 +334,7 @@ export async function codePlan(
       stream: false,
     };
 
-    const res = await fetch(`${ollamaHost}/api/chat`, {
+    const res = await fetch(`${ollamaUrl}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
