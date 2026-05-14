@@ -55,7 +55,6 @@ const TRIGGERABLE_AGENTS = [
   'ops-investigator',
   'workstation-agent',
   'infra-agent',
-  'pm-agent',
   'blog-agent',
   'research-agent',
   'code-review-agent',

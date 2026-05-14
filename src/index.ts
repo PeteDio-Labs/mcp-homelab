@@ -224,9 +224,9 @@ server.tool(
 
 server.tool(
   'run_agent',
-  'Trigger an allowed agent via Mission Control. Returns a task ID to poll with get_task_status. Allowed agents: knowledge-janitor, ops-investigator, workstation-agent, infra-agent, pm-agent, blog-agent.',
+  'Trigger an allowed agent via Mission Control. Returns a task ID to poll with get_task_status. Allowed agents: knowledge-janitor, ops-investigator, workstation-agent, infra-agent, blog-agent.',
   {
-    agentName: z.enum(['knowledge-janitor', 'ops-investigator', 'workstation-agent', 'infra-agent', 'pm-agent', 'blog-agent']).describe('Agent to trigger'),
+    agentName: z.enum(['knowledge-janitor', 'ops-investigator', 'workstation-agent', 'infra-agent', 'blog-agent']).describe('Agent to trigger'),
     input: z.record(z.string(), z.unknown()).default({}).describe('Input payload for the agent'),
   },
   async ({ agentName, input }) => {
